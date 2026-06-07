@@ -30,7 +30,7 @@ function scaleValue(v: number): number {
       >
         <!-- 图片 -->
         <img
-          :src="placement.contentUnit.image.dataUrl"
+          :src="placement.contentUnit.image.objectUrl"
           :style="{
             position: 'absolute',
             left: scaleValue(placement.imageArea.x) + 'px',

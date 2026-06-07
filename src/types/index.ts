@@ -21,7 +21,7 @@ export interface ContentUnit {
 export interface ImageInfo {
   id: string
   file: File
-  dataUrl: string // base64 或 blob URL
+  objectUrl: string // blob URL for preview display
   width: number
   height: number
   ratio: number   // width / height

@@ -22,35 +22,31 @@ export function classifyImage(width: number, height: number): ImageCategory {
 // 从File对象读取图片信息
 export function loadImageInfo(file: File): Promise<ImageInfo> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader()
+    const objectUrl = URL.createObjectURL(file)
+    const img = new Image()
 
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result as string
-      const img = new Image()
+    img.onload = () => {
+      const width = img.naturalWidth
+      const height = img.naturalHeight
+      const ratio = width / height
+      const category = classifyImage(width, height)
 
-      img.onload = () => {
-        const width = img.naturalWidth
-        const height = img.naturalHeight
-        const ratio = width / height
-        const category = classifyImage(width, height)
-
-        resolve({
-          id: `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          file,
-          dataUrl,
-          width,
-          height,
-          ratio,
-          category
-        })
-      }
-
-      img.onerror = () => reject(new Error(`Failed to load image: ${file.name}`))
-      img.src = dataUrl
+      resolve({
+        id: `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        file,
+        objectUrl,
+        width,
+        height,
+        ratio,
+        category
+      })
     }
 
-    reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`))
-    reader.readAsDataURL(file)
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error(`Failed to load image: ${file.name}`))
+    }
+    img.src = objectUrl
   })
 }
 

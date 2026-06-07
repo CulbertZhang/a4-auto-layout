@@ -19,6 +19,19 @@ function classifyRatio(ratio: number): ImageCategory {
   return ImageCategory.TALL_PORTRAIT
 }
 
+async function loadImageDimensions(file: File): Promise<{ width: number; height: number; objectUrl: string }> {
+  const objectUrl = URL.createObjectURL(file)
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight, objectUrl })
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error(`Failed to load: ${file.name}`))
+    }
+    img.src = objectUrl
+  })
+}
+
 async function handleFiles(files: FileList | File[]) {
   const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'))
 
@@ -29,39 +42,34 @@ async function handleFiles(files: FileList | File[]) {
 
   try {
     const images: ImageInfo[] = []
+    const BATCH_SIZE = 20
 
-    for (let i = 0; i < imageFiles.length; i++) {
-      const file = imageFiles[i]
-      const reader = new FileReader()
+    for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
+      const batch = imageFiles.slice(i, i + BATCH_SIZE)
+      const results = await Promise.all(
+        batch.map(async (file, idx) => {
+          const { width, height, objectUrl } = await loadImageDimensions(file)
+          const ratio = width / height
+          return {
+            id: `img_${Date.now()}_${i + idx}`,
+            file,
+            objectUrl,
+            width,
+            height,
+            ratio,
+            category: classifyRatio(ratio)
+          } as ImageInfo
+        })
+      )
+      images.push(...results)
+      progress.value = Math.round((images.length / imageFiles.length) * 100)
 
-      const imageInfo = await new Promise<ImageInfo>((resolve, reject) => {
-        reader.onload = (e) => {
-          const dataUrl = e.target?.result as string
-          const img = new Image()
-
-          img.onload = () => {
-            resolve({
-              id: `img_${Date.now()}_${i}`,
-              file,
-              dataUrl,
-              width: img.naturalWidth,
-              height: img.naturalHeight,
-              ratio: img.naturalWidth / img.naturalHeight,
-              category: classifyRatio(img.naturalWidth / img.naturalHeight)
-            })
-          }
-          img.onerror = reject
-          img.src = dataUrl
-        }
-        reader.onerror = reject
-        reader.readAsDataURL(file)
-      })
-
-      images.push(imageInfo)
-      progress.value = Math.round(((i + 1) / imageFiles.length) * 100)
+      // Yield to event loop between batches
+      if (i + BATCH_SIZE < imageFiles.length) {
+        await new Promise(r => setTimeout(r, 0))
+      }
     }
 
-    // 转换为ContentUnit，默认使用文件名作为标题
     const units: ContentUnit[] = images.map((img) => ({
       id: img.id,
       image: img,

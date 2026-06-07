@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import type { ContentUnit, LayoutResult } from '../types'
 import { layoutContentUnits } from '../core/layoutEngine'
-import { exportToPDF } from '../export/pdfRenderer'
+const loadExporter = () => import('../export/pdfRenderer')
 import PageViewer from './PageViewer.vue'
 
 const props = defineProps<{
@@ -14,6 +14,7 @@ const emit = defineEmits<{
 }>()
 
 const isExporting = ref(false)
+const exportProgress = ref('')
 const currentPage = ref(0)
 const previewScale = ref(0.2)
 
@@ -39,13 +40,19 @@ function nextPage() {
 
 async function handleExport() {
   isExporting.value = true
+  exportProgress.value = '正在加载导出模块...'
   try {
-    await exportToPDF(layoutResult.value, `相册_${Date.now()}.pdf`)
+    const { exportToPDF } = await loadExporter()
+    exportProgress.value = '正在加载字体...'
+    await exportToPDF(layoutResult.value, `相册_${Date.now()}.pdf`, (current, total) => {
+      exportProgress.value = `正在生成 ${current}/${total} 页...`
+    })
   } catch (error) {
     console.error('Export failed:', error)
     alert('导出失败，请重试')
   } finally {
     isExporting.value = false
+    exportProgress.value = ''
   }
 }
 </script>
@@ -67,7 +74,7 @@ async function handleExport() {
         :disabled="isExporting"
         @click="handleExport"
       >
-        {{ isExporting ? '导出中...' : '导出PDF' }}
+        {{ isExporting ? exportProgress || '导出中...' : '导出PDF' }}
       </button>
     </div>
 

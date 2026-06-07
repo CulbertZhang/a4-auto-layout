@@ -1,27 +1,35 @@
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
+import { PDFDocument, rgb } from 'pdf-lib'
+import fontkit from '@pdf-lib/fontkit'
 import type { LayoutResult, ImagePlacement } from '../types'
 import { A4, TEXT_CONFIG } from '../utils/constants'
 
-// 将dataUrl转换为Uint8Array
-async function dataUrlToUint8Array(dataUrl: string): Promise<Uint8Array> {
-  const base64 = dataUrl.split(',')[1]
-  const binaryString = atob(base64)
-  const bytes = new Uint8Array(binaryString.length)
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i)
+const FONT_URL = 'https://fonts.gstatic.com/s/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_EnYxNbPCJo4xNrA.ttf'
+
+let cachedFontBytes: ArrayBuffer | null = null
+
+async function loadChineseFont(): Promise<ArrayBuffer> {
+  if (cachedFontBytes) return cachedFontBytes
+
+  const response = await fetch(FONT_URL)
+  if (!response.ok) {
+    throw new Error(`Failed to load font: ${response.status}`)
   }
-  return bytes
+  cachedFontBytes = await response.arrayBuffer()
+  return cachedFontBytes
 }
 
-// 检测图片类型
-function getImageType(dataUrl: string): 'jpeg' | 'png' {
-  if (dataUrl.startsWith('data:image/png')) {
+async function fileToUint8Array(file: File): Promise<Uint8Array> {
+  const buffer = await file.arrayBuffer()
+  return new Uint8Array(buffer)
+}
+
+function getImageTypeFromFile(file: File): 'jpeg' | 'png' {
+  if (file.type === 'image/png') {
     return 'png'
   }
   return 'jpeg'
 }
 
-// 渲染文字到PDF页面（支持自动换行）
 function drawTextWithWrap(
   page: any,
   text: string,
@@ -56,7 +64,6 @@ function drawTextWithWrap(
     }
   }
 
-  // 绘制最后一行
   if (currentLine) {
     page.drawText(currentLine, {
       x,
@@ -71,7 +78,6 @@ function drawTextWithWrap(
   return currentY
 }
 
-// 渲染单个图片位置到PDF页面
 async function renderPlacement(
   pdfDoc: PDFDocument,
   page: any,
@@ -80,9 +86,8 @@ async function renderPlacement(
 ): Promise<void> {
   const { contentUnit, imageArea, textArea } = placement
 
-  // 嵌入图片
-  const imageBytes = await dataUrlToUint8Array(contentUnit.image.dataUrl)
-  const imageType = getImageType(contentUnit.image.dataUrl)
+  const imageBytes = await fileToUint8Array(contentUnit.image.file)
+  const imageType = getImageTypeFromFile(contentUnit.image.file)
 
   let pdfImage
   try {
@@ -91,8 +96,7 @@ async function renderPlacement(
     } else {
       pdfImage = await pdfDoc.embedJpg(imageBytes)
     }
-  } catch (error) {
-    // 如果嵌入失败，尝试另一种格式
+  } catch {
     try {
       pdfImage = await pdfDoc.embedJpg(imageBytes)
     } catch {
@@ -100,10 +104,8 @@ async function renderPlacement(
     }
   }
 
-  // PDF坐标系从左下角开始，需要转换Y坐标
   const pdfY = A4.HEIGHT - imageArea.y - imageArea.height
 
-  // 绘制图片
   page.drawImage(pdfImage, {
     x: imageArea.x,
     y: pdfY,
@@ -111,10 +113,8 @@ async function renderPlacement(
     height: imageArea.height
   })
 
-  // 绘制文字
   const textPdfY = A4.HEIGHT - textArea.y - TEXT_CONFIG.TITLE_FONT_SIZE
 
-  // 绘制标题
   let currentY = drawTextWithWrap(
     page,
     contentUnit.text.title,
@@ -125,7 +125,6 @@ async function renderPlacement(
     font
   )
 
-  // 绘制描述
   if (contentUnit.text.description) {
     currentY -= TEXT_CONFIG.PADDING
     drawTextWithWrap(
@@ -140,29 +139,34 @@ async function renderPlacement(
   }
 }
 
-// 生成PDF文档
-export async function generatePDF(layoutResult: LayoutResult): Promise<Uint8Array> {
+export async function generatePDF(
+  layoutResult: LayoutResult,
+  onProgress?: (current: number, total: number) => void
+): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
+  pdfDoc.registerFontkit(fontkit)
 
-  // 使用内置字体（不支持中文，后续可替换为嵌入字体）
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const fontBytes = await loadChineseFont()
+  const font = await pdfDoc.embedFont(fontBytes)
 
-  for (const pageLayout of layoutResult.pages) {
-    // 创建A4页面
+  const totalPages = layoutResult.pages.length
+
+  for (let i = 0; i < totalPages; i++) {
+    const pageLayout = layoutResult.pages[i]
     const page = pdfDoc.addPage([A4.WIDTH, A4.HEIGHT])
 
-    // 渲染每个图片位置
     for (const placement of pageLayout.placements) {
       await renderPlacement(pdfDoc, page, placement, font)
     }
+
+    onProgress?.(i + 1, totalPages)
   }
 
   return pdfDoc.save()
 }
 
-// 下载PDF文件
 export function downloadPDF(pdfBytes: Uint8Array, filename: string = 'album.pdf'): void {
-  const blob = new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' })
+  const blob = new Blob([pdfBytes as BlobPart], { type: 'application/pdf' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -171,11 +175,11 @@ export function downloadPDF(pdfBytes: Uint8Array, filename: string = 'album.pdf'
   URL.revokeObjectURL(url)
 }
 
-// 一键生成并下载PDF
 export async function exportToPDF(
   layoutResult: LayoutResult,
-  filename?: string
+  filename?: string,
+  onProgress?: (current: number, total: number) => void
 ): Promise<void> {
-  const pdfBytes = await generatePDF(layoutResult)
+  const pdfBytes = await generatePDF(layoutResult, onProgress)
   downloadPDF(pdfBytes, filename)
 }
