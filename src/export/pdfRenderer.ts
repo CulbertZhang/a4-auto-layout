@@ -3,18 +3,29 @@ import fontkit from '@pdf-lib/fontkit'
 import type { LayoutResult, ImagePlacement } from '../types'
 import { A4, TEXT_CONFIG } from '../utils/constants'
 
-const FONT_URL = 'https://fonts.gstatic.com/s/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_EnYxNbPCJo4xNrA.ttf'
+const FONT_CSS_URL = 'https://fonts.googleapis.com/css2?family=Noto+Sans+SC&display=swap'
+const LOCAL_FONT_PATH = '/fonts/NotoSansSC-Regular.ttf'
 
 let cachedFontBytes: ArrayBuffer | null = null
 
 async function loadChineseFont(): Promise<ArrayBuffer> {
   if (cachedFontBytes) return cachedFontBytes
 
-  const response = await fetch(FONT_URL)
-  if (!response.ok) {
-    throw new Error(`Failed to load font: ${response.status}`)
+  try {
+    const cssResp = await fetch(FONT_CSS_URL)
+    const cssText = await cssResp.text()
+    const urlMatch = cssText.match(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)/)
+    if (!urlMatch) throw new Error('No font URL in CSS')
+
+    const fontResp = await fetch(urlMatch[1])
+    if (!fontResp.ok) throw new Error(`Font fetch ${fontResp.status}`)
+    cachedFontBytes = await fontResp.arrayBuffer()
+  } catch {
+    const fontResp = await fetch(LOCAL_FONT_PATH)
+    if (!fontResp.ok) throw new Error('Failed to load local fallback font')
+    cachedFontBytes = await fontResp.arrayBuffer()
   }
-  cachedFontBytes = await response.arrayBuffer()
+
   return cachedFontBytes
 }
 
@@ -156,7 +167,11 @@ export async function generatePDF(
     const page = pdfDoc.addPage([A4.WIDTH, A4.HEIGHT])
 
     for (const placement of pageLayout.placements) {
-      await renderPlacement(pdfDoc, page, placement, font)
+      try {
+        await renderPlacement(pdfDoc, page, placement, font)
+      } catch (e) {
+        console.warn('Skipped image placement:', (e as Error).message)
+      }
     }
 
     onProgress?.(i + 1, totalPages)

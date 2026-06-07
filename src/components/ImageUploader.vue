@@ -40,36 +40,45 @@ async function handleFiles(files: FileList | File[]) {
   isLoading.value = true
   progress.value = 0
 
-  try {
-    const images: ImageInfo[] = []
-    const BATCH_SIZE = 20
+  const images: ImageInfo[] = []
+  const failedFiles: string[] = []
+  const BATCH_SIZE = 20
 
-    for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
-      const batch = imageFiles.slice(i, i + BATCH_SIZE)
-      const results = await Promise.all(
-        batch.map(async (file, idx) => {
-          const { width, height, objectUrl } = await loadImageDimensions(file)
-          const ratio = width / height
-          return {
-            id: `img_${Date.now()}_${i + idx}`,
-            file,
-            objectUrl,
-            width,
-            height,
-            ratio,
-            category: classifyRatio(ratio)
-          } as ImageInfo
-        })
-      )
-      images.push(...results)
-      progress.value = Math.round((images.length / imageFiles.length) * 100)
+  for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
+    const batch = imageFiles.slice(i, i + BATCH_SIZE)
+    const settled = await Promise.allSettled(
+      batch.map(async (file, idx) => {
+        const { width, height, objectUrl } = await loadImageDimensions(file)
+        const ratio = width / height
+        return {
+          id: `img_${Date.now()}_${i + idx}`,
+          file,
+          objectUrl,
+          width,
+          height,
+          ratio,
+          category: classifyRatio(ratio)
+        } as ImageInfo
+      })
+    )
 
-      // Yield to event loop between batches
-      if (i + BATCH_SIZE < imageFiles.length) {
-        await new Promise(r => setTimeout(r, 0))
+    for (let j = 0; j < settled.length; j++) {
+      const result = settled[j]
+      if (result.status === 'fulfilled') {
+        images.push(result.value)
+      } else {
+        failedFiles.push(batch[j].name)
       }
     }
 
+    progress.value = Math.round(((i + batch.length) / imageFiles.length) * 100)
+
+    if (i + BATCH_SIZE < imageFiles.length) {
+      await new Promise(r => setTimeout(r, 0))
+    }
+  }
+
+  if (images.length > 0) {
     const units: ContentUnit[] = images.map((img) => ({
       id: img.id,
       image: img,
@@ -78,14 +87,14 @@ async function handleFiles(files: FileList | File[]) {
         description: ''
       }
     }))
-
     emit('upload', units)
-  } catch (error) {
-    console.error('Failed to load images:', error)
-    alert('部分图片加载失败，请重试')
-  } finally {
-    isLoading.value = false
   }
+
+  if (failedFiles.length > 0) {
+    alert(`${failedFiles.length} 张图片无法加载（可能格式不支持）:\n${failedFiles.slice(0, 5).join('\n')}${failedFiles.length > 5 ? '\n...' : ''}`)
+  }
+
+  isLoading.value = false
 }
 
 function onDrop(e: DragEvent) {
