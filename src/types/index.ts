@@ -55,6 +55,7 @@ export interface Template {
 export interface ImagePlacement {
   contentUnit: ContentUnit
   slot: Slot
+  rotation: number
   imageArea: {
     x: number
     y: number

@@ -1,12 +1,13 @@
 import type { ContentUnit, Template, Slot, ImagePlacement, PageLayout, LayoutResult } from '../types'
 import { ALL_TEMPLATES, getTemplatesForCount } from '../templates/templateDefinitions'
-import { IMAGE_MIN, GAP } from '../utils/constants'
+import { IMAGE_MIN, GAP, PAGE_IMAGE_COUNT, PHOTO_ROTATION } from '../utils/constants'
 import { calculateContentTextHeight } from './imageAnalyzer'
 
 // 计算图片在slot中的缩放和位置（不裁剪，居中显示）
 export function calculateImagePlacement(
   contentUnit: ContentUnit,
-  slot: Slot
+  slot: Slot,
+  rotation: number = 0
 ): ImagePlacement {
   const { text } = contentUnit
 
@@ -21,52 +22,31 @@ export function calculateImagePlacement(
     const imageAreaHeight = IMAGE_MIN.HEIGHT
     const textAreaHeight = slot.height - imageAreaHeight - GAP.VERTICAL
 
-    return createPlacement(contentUnit, slot, imageAreaHeight, textAreaHeight)
+    return createPlacement(contentUnit, slot, imageAreaHeight, textAreaHeight, rotation)
   }
 
-  return createPlacement(contentUnit, slot, availableImageHeight, textHeight)
+  return createPlacement(contentUnit, slot, availableImageHeight, textHeight, rotation)
 }
 
 function createPlacement(
   contentUnit: ContentUnit,
   slot: Slot,
   imageAreaHeight: number,
-  textAreaHeight: number
+  textAreaHeight: number,
+  rotation: number
 ): ImagePlacement {
   const { image } = contentUnit
-  const imgRatio = image.ratio
-  const slotRatio = slot.width / imageAreaHeight
-
-  let scale: number
-  let finalWidth: number
-  let finalHeight: number
-  let xOffset: number
-  let yOffset: number
-
-  if (imgRatio > slotRatio) {
-    // 图片更宽 - 以宽度为基准缩放
-    scale = slot.width / image.width
-    finalWidth = slot.width
-    finalHeight = image.height * scale
-    xOffset = 0
-    yOffset = (imageAreaHeight - finalHeight) / 2
-  } else {
-    // 图片更高 - 以高度为基准缩放
-    scale = imageAreaHeight / image.height
-    finalWidth = image.width * scale
-    finalHeight = imageAreaHeight
-    xOffset = (slot.width - finalWidth) / 2
-    yOffset = 0
-  }
+  const fit = calculateRotatedFit(image.width, image.height, slot.width, imageAreaHeight, rotation)
 
   return {
     contentUnit,
     slot,
+    rotation,
     imageArea: {
-      x: slot.x + xOffset,
-      y: slot.y + yOffset,
-      width: finalWidth,
-      height: finalHeight
+      x: slot.x + (slot.width - fit.width) / 2,
+      y: slot.y + (imageAreaHeight - fit.height) / 2,
+      width: fit.width,
+      height: fit.height
     },
     textArea: {
       x: slot.x,
@@ -74,14 +54,100 @@ function createPlacement(
       width: slot.width,
       height: textAreaHeight
     },
-    scale
+    scale: fit.scale
   }
+}
+
+function calculateRotatedFit(
+  imageWidth: number,
+  imageHeight: number,
+  slotWidth: number,
+  slotHeight: number,
+  rotation: number
+): { width: number; height: number; scale: number; utilization: number; ratioScore: number } {
+  const angle = Math.abs(rotation) * Math.PI / 180
+  const boundWidth = imageWidth * Math.cos(angle) + imageHeight * Math.sin(angle)
+  const boundHeight = imageWidth * Math.sin(angle) + imageHeight * Math.cos(angle)
+  const scale = Math.min(slotWidth / boundWidth, slotHeight / boundHeight)
+  const width = imageWidth * scale
+  const height = imageHeight * scale
+  const usedArea = width * height
+  const slotArea = slotWidth * slotHeight
+  const utilization = usedArea / slotArea
+  const rotatedRatio = boundWidth / boundHeight
+  const slotRatio = slotWidth / slotHeight
+  const ratioDiff = Math.abs(rotatedRatio - slotRatio) / Math.max(rotatedRatio, slotRatio)
+  const ratioScore = 1 - Math.min(ratioDiff, 1)
+
+  return { width, height, scale, utilization, ratioScore }
+}
+
+function isLandscape(unit: ContentUnit): boolean {
+  return unit.image.ratio > 1.2
+}
+
+function isPortrait(unit: ContentUnit): boolean {
+  return unit.image.ratio < 0.8
+}
+
+function hasMixedOrientation(contentUnits: ContentUnit[]): boolean {
+  return contentUnits.some(isLandscape) && contentUnits.some(isPortrait)
+}
+
+function hashString(value: string): number {
+  let hash = 0
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0
+  }
+  return hash
+}
+
+function getRotationSign(unit: ContentUnit, slotIndex: number): 1 | -1 {
+  return (hashString(`${unit.id}-${slotIndex}`) % 2 === 0) ? 1 : -1
+}
+
+function chooseRotationForSlot(
+  unit: ContentUnit,
+  slot: Slot,
+  imageAreaHeight: number,
+  allowRotation: boolean,
+  slotIndex: number
+): number {
+  if (!allowRotation) return 0
+
+  const baseFit = calculateRotatedFit(unit.image.width, unit.image.height, slot.width, imageAreaHeight, 0)
+  let bestRotation = 0
+  let bestUtilization = baseFit.utilization
+
+  for (const candidate of PHOTO_ROTATION.CANDIDATE_DEGREES) {
+    if (candidate === 0 || Math.abs(candidate) > PHOTO_ROTATION.MAX_DEGREES) continue
+
+    const fit = calculateRotatedFit(
+      unit.image.width,
+      unit.image.height,
+      slot.width,
+      imageAreaHeight,
+      candidate
+    )
+
+    if (fit.utilization > bestUtilization) {
+      bestUtilization = fit.utilization
+      bestRotation = Math.abs(candidate)
+    }
+  }
+
+  if (bestUtilization - baseFit.utilization < PHOTO_ROTATION.MIN_GAIN_TO_ROTATE) {
+    return 0
+  }
+
+  return bestRotation * getRotationSign(unit, slotIndex)
 }
 
 // 计算模板适配得分
 export function calculateFitScore(
   contentUnits: ContentUnit[],
-  template: Template
+  template: Template,
+  allowRotation: boolean = false
 ): number {
   if (contentUnits.length !== template.slotCount) {
     return -1
@@ -107,27 +173,17 @@ export function calculateFitScore(
       continue
     }
 
-    const slotRatio = slot.width / availableHeight
-    const imgRatio = unit.image.ratio
-
-    // 计算空间利用率
-    let scale: number
-    if (imgRatio > slotRatio) {
-      scale = slot.width / unit.image.width
-    } else {
-      scale = availableHeight / unit.image.height
-    }
-
-    const usedArea = (unit.image.width * scale) * (unit.image.height * scale)
-    const slotArea = slot.width * availableHeight
-    const utilization = usedArea / slotArea
-
-    // 宽高比相似度
-    const ratioDiff = Math.abs(imgRatio - slotRatio) / Math.max(imgRatio, slotRatio)
-    const ratioScore = 1 - Math.min(ratioDiff, 1)
+    const rotation = chooseRotationForSlot(unit, slot, availableHeight, allowRotation, i)
+    const fit = calculateRotatedFit(
+      unit.image.width,
+      unit.image.height,
+      slot.width,
+      availableHeight,
+      rotation
+    )
 
     // 综合得分: 60%空间利用率 + 40%比例匹配度
-    totalScore += utilization * 0.6 + ratioScore * 0.4
+    totalScore += fit.utilization * 0.6 + fit.ratioScore * 0.4
   }
 
   return totalScore / template.slotCount
@@ -210,10 +266,12 @@ interface PageAssignment {
   template: Template
   units: ContentUnit[]
   score: number
+  rotations: number[]
 }
 
 function findBestPageAssignment(
-  remaining: ContentUnit[]
+  remaining: ContentUnit[],
+  targetCount: number
 ): PageAssignment | null {
   if (remaining.length === 0) {
     return null
@@ -221,8 +279,10 @@ function findBestPageAssignment(
 
   let bestResult: PageAssignment | null = null
 
-  // 从6张图片模板开始尝试，优先填充更多图片
-  for (let count = Math.min(6, remaining.length); count >= 1; count--) {
+  const maxCount = Math.min(PAGE_IMAGE_COUNT.MAX, remaining.length)
+  const countOrder = buildCountOrder(targetCount, maxCount)
+
+  for (const count of countOrder) {
     const templates = getTemplatesForCount(count)
     if (templates.length === 0) continue
 
@@ -230,34 +290,56 @@ function findBestPageAssignment(
 
     for (const template of templates) {
       for (const candidate of candidates) {
+        const allowRotation = hasMixedOrientation(candidate)
         if (!canFitInTemplate(candidate, template)) {
           continue
         }
 
-        const score = calculateFitScore(candidate, template)
+        const score = calculateFitScore(candidate, template, allowRotation)
 
-        // 优先选择图片数量更多的模板（每多一张图片加0.1分）
-        const adjustedScore = score + count * 0.1
+        const targetDistancePenalty = Math.abs(count - targetCount) * 0.08
+        const adjustedScore = score - targetDistancePenalty
 
         if (!bestResult || adjustedScore > bestResult.score) {
           bestResult = {
             template,
             units: candidate,
-            score: adjustedScore
+            score: adjustedScore,
+            rotations: candidate.map((unit, idx) => {
+              const slot = template.slots[idx]
+              const textHeight = calculateContentTextHeight(unit.text.title, unit.text.description, slot.width)
+              const availableHeight = slot.height - textHeight - GAP.VERTICAL
+              return chooseRotationForSlot(unit, slot, availableHeight, allowRotation, idx)
+            })
           }
         }
-      }
-    }
-
-    // 如果当前图片数量找到了合适的组合，不再尝试更少的图片
-    if (bestResult) {
-      if (bestResult.units.length === count) {
-        break
       }
     }
   }
 
   return bestResult
+}
+
+function buildCountOrder(targetCount: number, maxCount: number): number[] {
+  const counts: number[] = []
+  for (let distance = 0; distance <= maxCount; distance++) {
+    const lower = targetCount - distance
+    const higher = targetCount + distance
+    if (lower >= 1 && lower <= maxCount) counts.push(lower)
+    if (higher !== lower && higher >= 1 && higher <= maxCount) counts.push(higher)
+  }
+  return counts
+}
+
+function chooseRandomPageCount(remainingCount: number): number {
+  if (remainingCount <= PAGE_IMAGE_COUNT.SINGLE_REMAINING_THRESHOLD) {
+    return remainingCount
+  }
+
+  const max = Math.min(PAGE_IMAGE_COUNT.MAX, remainingCount)
+  const min = Math.min(PAGE_IMAGE_COUNT.MIN, max)
+  const preferredMax = max > min ? Math.min(max, PAGE_IMAGE_COUNT.MAX - 1) : max
+  return Math.floor(Math.random() * (preferredMax - min + 1)) + min
 }
 
 // 主布局算法：将所有内容单元分配到页面
@@ -266,7 +348,8 @@ export function layoutContentUnits(contentUnits: ContentUnit[]): LayoutResult {
   const remaining = [...contentUnits]
 
   while (remaining.length > 0) {
-    const result = findBestPageAssignment(remaining)
+    const targetCount = chooseRandomPageCount(remaining.length)
+    const result = findBestPageAssignment(remaining, targetCount)
 
     if (!result) {
       // 无法找到合适的模板，使用单图模板强制放置
@@ -282,7 +365,7 @@ export function layoutContentUnits(contentUnits: ContentUnit[]): LayoutResult {
     } else {
       // 使用找到的最佳组合
       const placements = result.units.map((unit, idx) =>
-        calculateImagePlacement(unit, result.template.slots[idx])
+        calculateImagePlacement(unit, result.template.slots[idx], result.rotations[idx] ?? 0)
       )
 
       pages.push({

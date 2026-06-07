@@ -37,7 +37,9 @@ function scaleValue(v: number): number {
             top: scaleValue(placement.imageArea.y) + 'px',
             width: scaleValue(placement.imageArea.width) + 'px',
             height: scaleValue(placement.imageArea.height) + 'px',
-            objectFit: 'contain'
+            objectFit: 'contain',
+            transform: `rotate(${placement.rotation}deg)`,
+            transformOrigin: 'center center'
           }"
         />
         <!-- 文字区域 -->

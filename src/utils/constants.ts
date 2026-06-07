@@ -42,6 +42,20 @@ export const IMAGE_MIN = {
   HEIGHT: 200
 } as const
 
+// 每页照片数随机分配范围
+export const PAGE_IMAGE_COUNT = {
+  MIN: 3,
+  MAX: 6,
+  SINGLE_REMAINING_THRESHOLD: 2
+} as const
+
+// 混合横竖照片时允许小角度旋转，以提升空白区域利用率
+export const PHOTO_ROTATION = {
+  MAX_DEGREES: 45,
+  CANDIDATE_DEGREES: [-45, -30, -15, 0, 15, 30, 45],
+  MIN_GAIN_TO_ROTATE: 0.05
+} as const
+
 // 宽高比分类阈值
 export const RATIO_THRESHOLD = {
   WIDE_LANDSCAPE: 1.8,

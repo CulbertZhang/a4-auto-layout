@@ -1,4 +1,4 @@
-import { PDFDocument, rgb } from 'pdf-lib'
+import { PDFDocument, degrees, rgb } from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import type { LayoutResult, ImagePlacement } from '../types'
 import { A4, TEXT_CONFIG } from '../utils/constants'
@@ -116,13 +116,32 @@ async function renderPlacement(
   }
 
   const pdfY = A4.HEIGHT - imageArea.y - imageArea.height
+  const rotation = placement.rotation || 0
 
-  page.drawImage(pdfImage, {
-    x: imageArea.x,
-    y: pdfY,
-    width: imageArea.width,
-    height: imageArea.height
-  })
+  if (rotation === 0) {
+    page.drawImage(pdfImage, {
+      x: imageArea.x,
+      y: pdfY,
+      width: imageArea.width,
+      height: imageArea.height
+    })
+  } else {
+    const drawBox = calculateRotatedPdfDrawBox(
+      imageArea.x + imageArea.width / 2,
+      A4.HEIGHT - imageArea.y - imageArea.height / 2,
+      imageArea.width,
+      imageArea.height,
+      rotation
+    )
+
+    page.drawImage(pdfImage, {
+      x: drawBox.x,
+      y: drawBox.y,
+      width: imageArea.width,
+      height: imageArea.height,
+      rotate: degrees(rotation)
+    })
+  }
 
   const textPdfY = A4.HEIGHT - textArea.y - TEXT_CONFIG.TITLE_FONT_SIZE
 
@@ -147,6 +166,29 @@ async function renderPlacement(
       TEXT_CONFIG.DESC_FONT_SIZE,
       font
     )
+  }
+}
+
+function calculateRotatedPdfDrawBox(
+  centerX: number,
+  centerY: number,
+  width: number,
+  height: number,
+  rotation: number
+): { x: number; y: number } {
+  const angle = rotation * Math.PI / 180
+  const cos = Math.cos(angle)
+  const sin = Math.sin(angle)
+  const cornerXs = [0, width * cos, -height * sin, width * cos - height * sin]
+  const cornerYs = [0, width * sin, height * cos, width * sin + height * cos]
+  const minX = Math.min(...cornerXs)
+  const maxX = Math.max(...cornerXs)
+  const minY = Math.min(...cornerYs)
+  const maxY = Math.max(...cornerYs)
+
+  return {
+    x: centerX - (minX + maxX) / 2,
+    y: centerY - (minY + maxY) / 2
   }
 }
 
